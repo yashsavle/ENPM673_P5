@@ -8,10 +8,19 @@ import os
 import matplotlib.pyplot as plt
 import random
 import time
-import pandas as pd
+#from numba import jit
+#from numba import vectorize
 
 # Store the Dataset as a list
 path = 'stereo/centre/'
+
+# Path to write frames
+os.mkdir('timelapse/')
+wrframe = 'timelapse/'
+
+# Path to plot
+os.mkdir('plots/')
+pathplot = 'plots/'
 #f = [img for img in glob.glob(path)]
 f=[]
 for img in os.listdir(path):
@@ -25,6 +34,7 @@ fx, fy , cx , cy ,camera_image, LUT = ReadCameraModel('./model')
 # Calibration Matrix
 K =  np.array([[fx , 0 , cx], [0 , fy ,cy], [0 , 0 , 1]])
 
+# Open file to write camera coordinates
 file1 = open("points.txt","a")
 
 # SIFT to find Points of Correspondence
@@ -62,8 +72,9 @@ def findpts(img1,img2):
 	return f1,f2
 
 
-
-
+#@vectorize(['float32(float32, float32)'], target='cuda')
+#@jit(nopython = True)
+# Function to determine F
 def findF(f1,f2):
 	total = 0
 	F_new = np.zeros((3,3))
@@ -72,7 +83,6 @@ def findF(f1,f2):
 	it = 10 # No. of iterations for RANSAC
 	j=0
 	for j in range(0,it):
-		#print(j)
 		c = 0
 		pts = []
 		frame1 = []
@@ -88,16 +98,16 @@ def findF(f1,f2):
 			if len(pts) == 8:
 				break
 
-		#print (pts)
         # update features
 		for p in pts:
 			frame1.append([f1[p][0], f1[p][1]])
 			frame2.append([f2[p][0], f2[p][1]])
 
+		# Find Fundamental Matrix F
 		F = run_ransac(frame1,frame2)
-		#print(F)
+
 		for k in range(0, len(f1)):
-			#print(k)
+			
 			if checkval(f1[k], f2[k],F) < 0.01:
 				c+=1
 				#print('a\n')
@@ -109,9 +119,9 @@ def findF(f1,f2):
 			i1 = tmp1
 			i2 = tmp2
 		
-	return F,i1,i2
+	return F_new,i1,i2
 
-
+# Ransac to solve for F
 def run_ransac(f1,f2):
 	A = np.empty((8, 9))
 
@@ -136,7 +146,8 @@ def run_ransac(f1,f2):
 	return F  
 
 
-
+#@vectorize(['float32(float32, float32)'], target='cuda')
+# 
 def checkval(x1, x2 , F):
 	a=np.array([x1[0],x1[1],1]).T
 	b=np.array([x2[0],x2[1],1])
@@ -157,8 +168,8 @@ def findE(cal,F):
 	return E
 
 
-
-
+# @vectorize(['float32(float32, float32)'], target='cuda')
+# Decompose E into T and R matrix
 def decomp(E):
 	u, s, v = np.linalg.svd(E, full_matrices=True)
 	w = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])
@@ -199,7 +210,8 @@ def decomp(E):
 
 	return [r1, r2, r3, r4], [c1, c2, c3, c4]
 
-
+#@vectorize(['float32(float32, float32)'], target='cuda')
+# Estimate Depth of points
 def cheirality_check(R, C, i1, i2):
 	check = 0
 
@@ -229,7 +241,7 @@ def cheirality_check(R, C, i1, i2):
 
 
 	return newR, newC
-
+#@vectorize(['float32(float32, float32)'], target='cuda')
 # Find angles
 def get_orientation(R):
 	angle = math.sqrt(R[0,0]**2+ R[1,0]**2)
@@ -246,6 +258,7 @@ def get_orientation(R):
 		z = 0
 	return np.array([x*180/math.pi, y*180/math.pi, z*180/math.pi])
 
+#@vectorize(['float32(float32, float32)'], target='cuda')
 # Perform Linear Triangulation
 def linear_triangulation(pose1,pose2,pt1,pt2):
 	x_i = np.array([[0, -1, pt1[1]], [1, 0, -pt1[0]], [-pt1[1], pt1[0], 0]])
@@ -259,7 +272,7 @@ def linear_triangulation(pose1,pose2,pt1,pt2):
 	new_X = new_X.reshape((4,1))
 	return new_X[0:3].reshape((3,1))   
 
-
+#@vectorize(['float32(float32, float32)'], target='cuda')
 # Homogeneous Matrix
 def get_homogeneous(R, T):
 	a = np.column_stack((R, T))
@@ -268,70 +281,85 @@ def get_homogeneous(R, T):
 	return H
 
 # Main
+def main():
+	# Preprocess Images
+	start_t = time.time()
+	H_init = np.identity(4)
+	p0 = np.array([[0,0,0,1]]).T
+	data = [] 
+	for i in range(18,len(f)-1):
+		print(i)
+		img1 = cv2.imread(path+str(f[i]),0)
+		# cv2.imshow("",img1)
+		# cv2.waitKey(0)
+		# Frame 1
+		bgr_img1 = cv2.cvtColor(img1, cv2.COLOR_BayerGR2BGR)
+		undist_img1 = UndistortImage(bgr_img1,LUT)
+		gray_img1 = cv2.cvtColor(undist_img1,cv2.COLOR_BGR2GRAY)
 
-# Preprocess Images
-start_t = time.time()
-H_init = np.identity(4)
-p0 = np.array([[0,0,0,1]]).T
-data = [] 
-for i in range(19,25):
-	print(i)
-	img1 = cv2.imread(path+str(f[i]),0)
-	# cv2.imshow("",img1)
-	# cv2.waitKey(0)
-	bgr_img1 = cv2.cvtColor(img1, cv2.COLOR_BayerGR2BGR)
-	undist_img1 = UndistortImage(bgr_img1,LUT)
-	gray_img1 = cv2.cvtColor(undist_img1,cv2.COLOR_BGR2GRAY)
+		# Frame 2
+		img2 = cv2.imread(path+str(f[i+1]),0)
+		bgr_img2 = cv2.cvtColor(img2, cv2.COLOR_BayerGR2BGR)
+		undist_img2 = UndistortImage(bgr_img2,LUT)
+		gray_img2 = cv2.cvtColor(undist_img2,cv2.COLOR_BGR2GRAY)
 
+		gray_img1 = gray_img1[250:600 , 0:1280]
+		gray_img2 = gray_img2[250:600 , 0:1280]
 
-	img2 = cv2.imread(path+str(f[i+1]),0)
-	bgr_img2 = cv2.cvtColor(img2, cv2.COLOR_BayerGR2BGR)
-	undist_img2 = UndistortImage(bgr_img2,LUT)
-	gray_img2 = cv2.cvtColor(undist_img2,cv2.COLOR_BGR2GRAY)
+		# Find Points of Correspondence 
 
-	gray_img1 = gray_img1[200:650 , 0:1280]
-	gray_img2 = gray_img2[200:650 , 0:1280]
+		f1,f2 = findpts(gray_img1,gray_img2)
 
-	# Find Points of Correspondence 
+		for l in range(0,len(f1)):
+			a = (int(f1[l][0]) , int(f1[l][1]))
+			sift_img = cv2.circle(gray_img2, a,1,(255,0,0),3)
+		cv2.imwrite(os.path.join(wrframe,str(i)+'.jpg'),bgr_img1)
+		#sift_img = plt.imread(sift_img)
+		# plt.imshow("",sift_img)
+		# cv2.waitKey(0)
+		# #print(f2)
 
-	f1,f2 = findpts(gray_img1,gray_img2)
-	for l in range(0,len(f1)):
-		a = (int(f1[l][0]) , int(f1[l][1]))
-		sift_img = cv2.circle(gray_img1, a,1,(255,0,0),3)
-	# sift_img = plt.imread(sift_img)
-	# plt.imshow("",sift_img)
-	# cv2.waitKey(0)
-	# #print(f2)
-	# Determine F
+		# Determine F
 
-	F, i1 ,i2 = findF(f1,f2)
-	E = findE(K, F)
+		F, i1 ,i2 = findF(f1,f2)
+		
+		# Determine E
+		E = findE(K, F)
 
-	#print(E)
-	# Find T and R
-	R_list, T_list = decomp(E)
-	R , T = cheirality_check(R_list,T_list,i1,i2)
+		#print(E)
 
-    # Find Homogeneous Matrix and Camera Centre for Each frame
+		# Find T and R
+		R_list, T_list = decomp(E)
+		
+		# Find Best estimates for R and T
+		R , T = cheirality_check(R_list,T_list,i1,i2)
 
-	H = get_homogeneous(R,T)
-	H_init = H_init @ H
-	p = H_init @ p0
+	    # Find Homogeneous Matrix and Camera Centre for Each frame
 
-	print('X = ',p[0])
-	print('Y = ',p[2])
-	data.append([p[0][0], -p[2][0]])
-	file1.write(str(p[0][0])+",")
-	file1.write(str(-p[2][0])+"\n")
-	plt.scatter(p[0][0], -p[2][0], color='b')
-file1.close()
-end_t = time.time()
-delta = (end_t - start_t)/60
-print("Time taken: ",delta)
-df = pd.DataFrame(data, columns = ['X', 'Y'])
-df.to_excel('coordinates.xlsx')
-plt.show()
+		H = get_homogeneous(R,T)
+		H_init = H_init @ H
+		p = H_init @ p0
 
+		print('X = ',p[0])
+		print('Y = ',p[2])
 
+		# Write the Co-ordinates in a text file
+		#data.append([p[0][0], -p[2][0]])
+		file1.write(str(p[0][0])+",")
+		file1.write(str(-p[2][0])+"\n")
+
+		# Plot the Trajectory
+		# plt.yticks(np.arange(-200,800,100))
+		# plt.xticks(np.arange(0,1000,100))
+		plt.scatter(p[0][0], -p[2][0], color='b')
+		plt.savefig(os.path.join(pathplot,str(i)+'.png'))
+	file1.close()
+	end_t = time.time()
+	delta = (end_t - start_t)/60
+	print("Time taken: ",delta)
+	plt.show()
+
+if __name__ == '__main__':
+	main()
 
 
