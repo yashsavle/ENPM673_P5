@@ -74,6 +74,7 @@ def findpts(img1,img2):
 
 #@vectorize(['float32(float32, float32)'], target='cuda')
 #@jit(nopython = True)
+
 # Function to determine F
 def findF(f1,f2):
 	total = 0
